@@ -34,14 +34,24 @@
         </div>
 
         <!-- Live Status Display -->
-        <div id="result-container" class="bg-gray-700 p-6 rounded-lg">
+        <div class="bg-gray-700 p-6 rounded-lg">
             <h2 class="text-2xl font-semibold text-center mb-4">Live Status</h2>
             <div id="status-box" class="p-6 rounded-lg text-center transition-all duration-300 bg-gray-600">
                 <p id="status-text" class="text-4xl font-extrabold">MONITORING</p>
-                <p id="status-time" class="mt-2 text-gray-400 text-sm">Waiting for the trading window to open...</p>
+                <p id="status-time" class="mt-2 text-gray-400 text-sm">Checking for live signals...</p>
             </div>
-            <div id="conditions-breakdown" class="mt-4 hidden"></div>
         </div>
+
+        <!-- Last Detected Signal -->
+        <div id="past-signal-container" class="bg-gray-700 p-6 rounded-lg hidden">
+            <h2 class="text-2xl font-semibold text-center mb-4">Last Detected Signal</h2>
+            <div id="past-signal-box" class="p-6 rounded-lg text-center">
+                <p id="past-signal-text" class="text-4xl font-extrabold"></p>
+                <p id="past-signal-time" class="mt-2 text-gray-400 text-sm"></p>
+            </div>
+             <div id="past-conditions-breakdown" class="mt-4"></div>
+        </div>
+
 
         <!-- Trade Journal Section -->
         <div class="bg-gray-700 p-6 rounded-lg">
@@ -67,8 +77,8 @@
 
     <!-- Trade Signal Modal -->
     <div id="signal-modal" class="modal fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 hidden z-50">
-        <div class="modal-content bg-gray-800 rounded-lg shadow-xl w-full max-w-md p-6 transform scale-95">
-            <h2 class="text-2xl font-bold text-center mb-2">New Trade Signal!</h2>
+        <div class="modal-content bg-gray-800 rounded-lg shadow-xl w-full max-w-md p-6 transform scale-95 opacity-0">
+            <h2 class="text-2xl font-bold text-center mb-2">New LIVE Signal!</h2>
             <div id="modal-signal-box" class="p-6 rounded-lg text-center my-4">
                 <p id="modal-signal-text" class="text-5xl font-extrabold"></p>
                 <p id="modal-signal-time" class="mt-2 text-gray-400 text-sm"></p>
@@ -104,7 +114,6 @@
         const statusText = document.getElementById('status-text');
         const statusTime = document.getElementById('status-time');
         const statusBox = document.getElementById('status-box');
-        const conditionsBreakdown = document.getElementById('conditions-breakdown');
         const currentTimeDisplay = document.getElementById('currentTimeDisplay');
         const countdownDisplay = document.getElementById('countdownDisplay');
         const journalBody = document.getElementById('journal-body');
@@ -115,18 +124,23 @@
         const modalSignalTime = document.getElementById('modal-signal-time');
         const initialChoiceButtons = document.getElementById('initial-choice-buttons');
         const journalForm = document.getElementById('journal-form');
+        const pastSignalContainer = document.getElementById('past-signal-container');
+        const pastSignalBox = document.getElementById('past-signal-box');
+        const pastSignalText = document.getElementById('past-signal-text');
+        const pastSignalTime = document.getElementById('past-signal-time');
+        const pastConditionsBreakdown = document.getElementById('past-conditions-breakdown');
 
-        let lastSignalData = null; // Store the latest signal data for the journal
+        let lastSignalData = null;
 
         // --- CORE LOGIC ---
         document.addEventListener('DOMContentLoaded', () => {
             loadJournal();
-            setInterval(updateTimersAndCheckSignal, 1000); // Check every second for countdown
+            handleFetchDataClick(); // Initial fetch on load
+            setInterval(updateTimers, 1000); // Update timers every second
+            setInterval(handleFetchDataClick, 15 * 60 * 1000); // Check for new data every 15 minutes
         });
-        
-        let checkInterval = setInterval(handleFetchDataClick, 60000); // Check for signals every minute
 
-        function updateTimersAndCheckSignal() {
+        function updateTimers() {
             const now = new Date();
             currentTimeDisplay.textContent = `${now.toUTCString()} (GMT) | ${now.toLocaleString()} (Your Local Time)`;
             updateCountdown(now);
@@ -162,20 +176,6 @@
         }
 
         async function handleFetchDataClick() {
-            const now = new Date();
-            const day = now.getUTCDay();
-            const hour = now.getUTCHours();
-            const isTradingDay = day >= 2 && day <= 4;
-            const isTradingHour = hour >= 12 && hour < 17;
-
-            if (!isTradingDay || !isTradingHour) {
-                statusText.textContent = "MONITORING";
-                statusTime.textContent = "Waiting for the trading window to open...";
-                statusBox.className = 'p-6 rounded-lg text-center transition-all duration-300 bg-gray-600';
-                conditionsBreakdown.classList.add('hidden');
-                return;
-            }
-
             statusText.textContent = "CHECKING...";
             statusBox.className = 'p-6 rounded-lg text-center transition-all duration-300 bg-yellow-500';
             
@@ -203,16 +203,37 @@
                 }));
 
                 const dataWithIndicators = calculateIndicators(data);
-                const latestCandle = dataWithIndicators[dataWithIndicators.length - 1];
-                const signalDetails = getSignalDetails(latestCandle);
                 
-                // Only show modal for new BUY/SELL signals
-                if ((signalDetails.signal === 'BUY' || signalDetails.signal === 'SELL') && (!lastSignalData || lastSignalData.candle.timestamp.getTime() !== signalDetails.candle.timestamp.getTime())) {
-                    lastSignalData = signalDetails;
-                    openModal(signalDetails);
+                let lastValidSignal = null;
+                for (let i = dataWithIndicators.length - 1; i >= 0; i--) {
+                    const candle = dataWithIndicators[i];
+                    const signalDetails = getSignalDetails(candle);
+                    if (signalDetails.signal === 'BUY' || signalDetails.signal === 'SELL') {
+                        lastValidSignal = signalDetails;
+                        break;
+                    }
                 }
-                
-                displayResult(signalDetails);
+
+                const latestCandle = dataWithIndicators[dataWithIndicators.length - 1];
+                const liveSignal = getSignalDetails(latestCandle);
+
+                // Is the most recent candle a LIVE signal?
+                if (liveSignal.signal === 'BUY' || liveSignal.signal === 'SELL') {
+                    displayResult(liveSignal, true); // Display as live
+                    if (!lastSignalData || lastSignalData.candle.timestamp.getTime() !== liveSignal.candle.timestamp.getTime()) {
+                        lastSignalData = liveSignal;
+                        openModal(liveSignal);
+                    }
+                } else {
+                    displayResult(liveSignal, false); // Display as monitoring/wait
+                }
+
+                // Display the last historical signal if it exists
+                if(lastValidSignal && (liveSignal.signal === 'WAIT' || liveSignal.signal === 'NONE')) {
+                    displayPastSignal(lastValidSignal);
+                } else {
+                    pastSignalContainer.classList.add('hidden');
+                }
 
             } catch (error) {
                 displayError('Could not process API data.');
@@ -278,47 +299,49 @@
             return { signal: 'WAIT', reason: 'No valid signal pattern.', conditions, candle };
         }
 
-        function displayResult({ signal, conditions, candle }) {
-            statusBox.className = 'p-6 rounded-lg text-center transition-all duration-300';
-            statusText.textContent = signal;
-            statusTime.textContent = `Last check: ${new Date().toLocaleTimeString()}`;
-            
+        function displayResult({ signal, conditions, candle }, isLive) {
+            if (isLive) {
+                statusBox.className = 'p-6 rounded-lg text-center transition-all duration-300';
+                statusText.textContent = signal;
+                statusTime.textContent = `Live Signal on current candle!`;
+                
+                switch(signal) {
+                    case 'BUY': statusBox.classList.add('bg-green-500'); break;
+                    case 'SELL': statusBox.classList.add('bg-red-500'); break;
+                }
+            } else {
+                statusText.textContent = "MONITORING";
+                statusTime.textContent = "No live signal. Waiting for next candle.";
+                statusBox.className = 'p-6 rounded-lg text-center transition-all duration-300 bg-gray-600';
+            }
+        }
+
+        function displayPastSignal({ signal, conditions, candle }) {
+            pastSignalContainer.classList.remove('hidden');
+            pastSignalBox.className = 'p-6 rounded-lg text-center';
+            pastSignalText.textContent = signal;
+            pastSignalTime.innerHTML = `GMT: ${candle.timestamp.toUTCString()}<br>Local: ${candle.timestamp.toLocaleString()}`;
+
             switch(signal) {
-                case 'BUY': statusBox.classList.add('bg-green-500'); break;
-                case 'SELL': statusBox.classList.add('bg-red-500'); break;
-                default: statusBox.classList.add('bg-gray-600'); break;
+                case 'BUY': pastSignalBox.classList.add('bg-green-500'); break;
+                case 'SELL': pastSignalBox.classList.add('bg-red-500'); break;
             }
 
-            conditionsBreakdown.innerHTML = '';
-            conditionsBreakdown.classList.remove('hidden');
-
+            pastConditionsBreakdown.innerHTML = '';
             const createConditionItem = (label, value, isMet) => {
                 const icon = isMet ? '✅' : '❌';
                 return `<div class="condition-item"><span class="text-gray-400">${label}</span><span class="font-semibold text-white">${value} ${icon}</span></div>`;
             };
 
-            if (conditions && candle) {
-                const candleTime = `GMT: ${candle.timestamp.toUTCString()}<br>Local: ${candle.timestamp.toLocaleString()}`;
-                conditionsBreakdown.innerHTML += `<div class="condition-item"><span class="text-gray-400">Candle Time</span><span class="font-semibold text-white text-right">${candleTime}</span></div>`;
-                conditionsBreakdown.innerHTML += createConditionItem('Day is Tue-Thu', conditions.isMidWeek ? 'Yes' : 'No', conditions.isMidWeek);
-                conditionsBreakdown.innerHTML += createConditionItem('Time is 12:00-17:00 GMT', conditions.isInTimeWindow ? 'Yes' : 'No', conditions.isInTimeWindow);
-                conditionsBreakdown.innerHTML += createConditionItem(`Volatility > 30% ATR (${conditions.atr})`, `${conditions.candleRange}`, conditions.isVolatileEnough);
-                
-                if (signal === 'BUY') {
-                    conditionsBreakdown.innerHTML += createConditionItem('Candle is Bearish', 'Yes', conditions.isBearish);
-                    conditionsBreakdown.innerHTML += createConditionItem('Price is Below 200 SMA', 'Yes', conditions.isBelowSMA);
-                } else if (signal === 'SELL') {
-                    conditionsBreakdown.innerHTML += createConditionItem('Candle is Bullish', 'Yes', conditions.isBullish);
-                    conditionsBreakdown.innerHTML += createConditionItem('Price is Above 200 SMA', 'Yes', conditions.isAboveSMA);
-                }
-            }
+            pastConditionsBreakdown.innerHTML += createConditionItem('Day is Tue-Thu', conditions.isMidWeek ? 'Yes' : 'No', conditions.isMidWeek);
+            pastConditionsBreakdown.innerHTML += createConditionItem('Time is 12:00-17:00 GMT', conditions.isInTimeWindow ? 'Yes' : 'No', conditions.isInTimeWindow);
+            pastConditionsBreakdown.innerHTML += createConditionItem(`Volatility > 30% ATR (${conditions.atr})`, `${conditions.candleRange}`, conditions.isVolatileEnough);
         }
         
         function displayError(message) {
              statusBox.className = 'p-6 rounded-lg text-center transition-all duration-300 bg-yellow-500';
              statusText.textContent = 'ERROR';
              statusTime.textContent = message;
-             conditionsBreakdown.classList.add('hidden');
         }
 
         // --- MODAL AND JOURNAL FUNCTIONS ---
@@ -333,15 +356,13 @@
             journalForm.classList.add('hidden');
             signalModal.classList.remove('hidden');
             setTimeout(() => {
-                signalModal.classList.remove('opacity-0');
-                modalContent.classList.remove('scale-95');
-                modalContent.classList.add('scale-100');
+                signalModal.classList.add('opacity-0');
+                modalContent.classList.remove('opacity-0', 'scale-95');
             }, 10);
         }
 
         function closeModal() {
-            modalContent.classList.remove('scale-100');
-            modalContent.classList.add('scale-95');
+            modalContent.classList.add('opacity-0', 'scale-95');
             signalModal.classList.add('opacity-0');
             setTimeout(() => signalModal.classList.add('hidden'), 250);
         }
@@ -363,7 +384,7 @@
             };
 
             let journal = JSON.parse(localStorage.getItem('tradeJournal')) || [];
-            journal.unshift(tradeEntry); // Add to the beginning
+            journal.unshift(tradeEntry);
             localStorage.setItem('tradeJournal', JSON.stringify(journal));
             
             loadJournal();
